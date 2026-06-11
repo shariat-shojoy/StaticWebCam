@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Proctoring Dashboard</title>
+
+    <style>
+
+        body{
+            font-family: Arial, sans-serif;
+            background:#f4f6f9;
+            text-align:center;
+            margin:20px;
+        }
+
+        h1{
+            color:#333;
+        }
+
+        video{
+            border:3px solid #333;
+            border-radius:10px;
+        }
+
+        .card{
+            background:white;
+            padding:15px;
+            margin:15px auto;
+            width:700px;
+            border-radius:10px;
+            box-shadow:0px 2px 8px rgba(0,0,0,0.15);
+        }
+
+        #risk{
+            font-size:32px;
+            font-weight:bold;
+        }
+
+        #details{
+            font-size:18px;
+            margin-top:10px;
+        }
+
+        #objects{
+            font-size:18px;
+            margin-top:10px;
+            color:#b71c1c;
+        }
+
+        #timeline{
+            text-align:left;
+            max-height:250px;
+            overflow-y:auto;
+        }
+
+        .event{
+            padding:8px;
+            border-bottom:1px solid #ddd;
+        }
+
+        button{
+            padding:12px 20px;
+            font-size:16px;
+            cursor:pointer;
+            border:none;
+            border-radius:6px;
+            background:#1976d2;
+            color:white;
+        }
+
+        button:hover{
+            background:#125ea8;
+        }
+
+    </style>
+</head>
+
+<body>
+
+<h1>🚨 AI Proctoring Dashboard</h1>
+
+<video
+        id="video"
+        width="640"
+        height="480"
+        autoplay>
+</video>
+
+<br><br>
+
+<button onclick="startMonitoring()">
+    Start Monitoring
+</button>
+
+<div class="card">
+
+    <div id="risk">
+        Risk Score: 0
+    </div>
+
+    <div id="details">
+        Waiting...
+    </div>
+
+</div>
+
+<div class="card">
+
+    <h3>🚩 Suspicious Objects</h3>
+
+    <div id="objects">
+        None
+    </div>
+
+</div>
+
+<div class="card">
+
+    <h3>⚠ Browser Violations</h3>
+
+    <div id="violations">
+        0
+    </div>
+
+</div>
+
+<div class="card">
+
+    <h3>📜 Event Timeline</h3>
+
+    <div id="timeline">
+
+    </div>
+
+</div>
+
+<canvas
+        id="canvas"
+        style="display:none;">
+</canvas>
+
+<script>
+
+    let monitoring = false;
+    let violationCount = 0;
+
+    // =====================================
+    // VIOLATION LOGGER
+    // =====================================
+
+    function reportViolation(type){
+
+        console.log("VIOLATION:", type);
+
+        violationCount++;
+
+        document
+            .getElementById("violations")
+            .innerText = violationCount;
+
+        fetch("/violation",{
+            method:"POST",
+            headers:{
+                "Content-Type":"application/json"
+            },
+            body:JSON.stringify({
+                type:type
+            })
+        })
+            .catch(err =>
+                console.log(err)
+            );
+    }
+
+    // =====================================
+    // TAB SWITCH
+    // =====================================
+
+    document.addEventListener(
+        "visibilitychange",
+        () => {
+
+            if(
+                monitoring &&
+                document.hidden
+            ){
+                reportViolation(
+                    "TAB_SWITCH"
+                );
+            }
+        }
+    );
+
+    // =====================================
+    // ALT + TAB
+    // =====================================
+
+    window.addEventListener(
+        "blur",
+        () => {
+
+            if(monitoring){
+
+                reportViolation(
+                    "WINDOW_BLUR"
+                );
+            }
+        }
+    );
+
+    // =====================================
+    // FULLSCREEN EXIT
+    // =====================================
+
+    document.addEventListener(
+        "fullscreenchange",
+        () => {
+
+            if(
+                monitoring &&
+                !document.fullscreenElement
+            ){
+
+                reportViolation(
+                    "EXIT_FULLSCREEN"
+                );
+
+                alert(
+                    "Exam mode requires fullscreen."
+                );
+            }
+        }
+    );
+
+    // =====================================
+    // CAMERA
+    // =====================================
+
+    navigator.mediaDevices
+        .getUserMedia({
+            video:true
+        })
+        .then(stream => {
+
+            document
+                .getElementById("video")
+                .srcObject = stream;
+
+        });
+
+    // =====================================
+    // START
+    // =====================================
+
+    async function startMonitoring(){
+
+        if(monitoring){
+            return;
+        }
+
+        try{
+
+            await document
+                .documentElement
+                .requestFullscreen();
+
+        }
+        catch(e){
+
+            alert(
+                "Please allow fullscreen mode."
+            );
+
+            return;
+        }
+
+        monitoring = true;
+
+        setInterval(
+            captureFrame,
+            2000
+        );
+    }
+
+    // =====================================
+    // FRAME CAPTURE
+    // =====================================
+
+    async function captureFrame(){
+
+        const video =
+            document.getElementById("video");
+
+        if(video.videoWidth === 0){
+            return;
+        }
+
+        const canvas =
+            document.getElementById("canvas");
+
+        canvas.width =
+            video.videoWidth;
+
+        canvas.height =
+            video.videoHeight;
+
+        const ctx =
+            canvas.getContext("2d");
+
+        ctx.drawImage(
+            video,
+            0,
+            0
+        );
+
+        canvas.toBlob(
+
+            async function(blob){
+
+                const formData =
+                    new FormData();
+
+                formData.append(
+                    "file",
+                    blob,
+                    "frame.jpg"
+                );
+
+                const response =
+                    await fetch(
+                        "/upload",
+                        {
+                            method:"POST",
+                            body:formData
+                        }
+                    );
+
+                const data =
+                    await response.json();
+
+                // ==========================
+                // RISK
+                // ==========================
+
+                const riskElement =
+                    document.getElementById("risk");
+
+                riskElement.innerText =
+                    "Risk Score: " +
+                    data.risk_score;
+
+                if(data.risk_score < 30){
+
+                    riskElement.style.color =
+                        "green";
+                }
+                else if(
+                    data.risk_score < 60
+                ){
+
+                    riskElement.style.color =
+                        "orange";
+                }
+                else{
+
+                    riskElement.style.color =
+                        "red";
+                }
+
+                // ==========================
+                // DETAILS
+                // ==========================
+
+                document
+                    .getElementById("details")
+                    .innerText =
+
+                    "Person: "
+                    + data.person_count
+
+                    + " | Phone: "
+                    + data.phone_detected
+
+                    + " | Book: "
+                    + data.book_detected
+
+                    + " | Laptop: "
+                    + data.laptop_detected
+
+                    + " | Keyboard: "
+                    + data.keyboard_detected
+
+                    + " | Mouse: "
+                    + data.mouse_detected
+
+                    + " | Face: "
+                    + data.face_detected
+
+                    + " | Head: "
+                    + data.head_direction;
+
+                // ==========================
+                // OBJECTS
+                // ==========================
+
+                let objects = [];
+
+                if(data.phone_detected)
+                    objects.push("📱 Phone");
+
+                if(data.book_detected)
+                    objects.push("📚 Book");
+
+                if(data.laptop_detected)
+                    objects.push("💻 Laptop");
+
+                if(data.keyboard_detected)
+                    objects.push("⌨️ Keyboard");
+
+                if(data.mouse_detected)
+                    objects.push("🖱️ Mouse");
+
+                document
+                    .getElementById("objects")
+                    .innerHTML =
+
+                    objects.length > 0
+
+                        ? objects.join(" | ")
+
+                        : "No suspicious objects";
+
+                // ==========================
+                // TIMELINE
+                // ==========================
+
+                let html = "";
+
+                for(
+                    const event
+                    of data.events
+                    ){
+
+                    html +=
+
+                        "<div class='event'>"
+
+                        + event.timestamp
+
+                        + " | "
+
+                        + event.event
+
+                        + " | Risk +"
+
+                        + event.risk_delta
+
+                        + "</div>";
+                }
+
+                document
+                    .getElementById("timeline")
+                    .innerHTML = html;
+
+            },
+
+            "image/jpeg"
+        );
+    }
+
+</script>
+
+</body>
+</html>
